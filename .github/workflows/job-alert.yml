@@ -1,0 +1,71 @@
+name: Job Alert to Telegram
+
+on:
+  schedule:
+    # 3시간마다 실행 (UTC 기준, KST = UTC+9)
+    - cron: "0 */3 * * *"
+  workflow_dispatch: {}   # Actions 탭에서 수동 실행 버튼도 쓸 수 있게
+
+# 이 워크플로가 동시에 여러 개 실행되면 마지막에 상태 파일(seen_*.json)을 커밋/푸시하는
+# 단계끼리 서로 밀어내면서(non-fast-forward) 실패하는 문제가 있었음.
+# 같은 그룹의 실행은 한 번에 하나만 돌게 하고, 뒤에 대기 중인 실행은 취소하지 않고 순서대로 기다리게 함.
+concurrency:
+  group: job-alert
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # 상태 파일 변경 사항을 저장소에 커밋하기 위해 필요
+
+jobs:
+  check-jobs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 저장소 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 사람인/원티드/잡코리아/인크루트 공고 검색 및 알림
+        env:
+          SARAMIN_ACCESS_KEY: ${{ secrets.SARAMIN_ACCESS_KEY }}
+          GOOGLE_CSE_API_KEY: ${{ secrets.GOOGLE_CSE_API_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+        run: python job_alert.py
+
+      - name: 네이버메일(사람인/인크루트/잡코리아) 채용 알림 메일 확인 및 알림
+        env:
+          NAVER_EMAIL_ID: ${{ secrets.NAVER_EMAIL_ID }}
+          NAVER_APP_PASSWORD: ${{ secrets.NAVER_APP_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python naver_mail_alert.py
+
+      - name: Gmail(원티드) 추천 공고 메일 확인 및 알림
+        env:
+          GMAIL_EMAIL_ADDR: ${{ secrets.GMAIL_EMAIL_ADDR }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python gmail_wanted_alert.py
+
+      - name: 원격 변경사항 먼저 반영 (커밋 충돌 방지)
+        run: git pull --rebase --autostash
+
+      - name: 변경된 상태 파일 커밋
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update seen state [skip ci]"
+          file_pattern: "seen_jobs.json seen_mail.json seen_gmail_mail.json"
